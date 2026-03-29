@@ -113,15 +113,48 @@
     return false;
   }
 
+  function isHiddenOverflow(v) {
+    if (!v) {
+      return false;
+    }
+    const x = v.toLowerCase();
+    if (x === "hidden") {
+      return true;
+    }
+    if (x === "clip") {
+      return true;
+    }
+    return false;
+  }
+
   function hiddenReason(el, cs) {
     if (el.tagName === "SUB" || el.tagName === "SUP") {
       return null;
     }
 
+    const opacity = parseFloat(cs.opacity);
+    const fontSize = parseFloat(cs.fontSize);
+    const lineHeight = parseFloat(cs.lineHeight);
+    const textIndent = parseFloat(cs.textIndent);
+    const height = parseFloat(cs.height);
+    const maxHeight = parseFloat(cs.maxHeight);
+    const width = parseFloat(cs.width);
+    const maxWidth = parseFloat(cs.maxWidth);
+    const colorAlpha = alphaFromColor(cs.color || "");
+    const fillAlpha = alphaFromColor(cs.webkitTextFillColor || "");
+    const inlineStyle = (el.getAttribute("style") || "").toLowerCase();
+    const offscreen = isOffscreen(cs);
+    const clipY = isHiddenOverflow(cs.overflowY) || isHiddenOverflow(cs.overflow);
+    const clipX = isHiddenOverflow(cs.overflowX) || isHiddenOverflow(cs.overflow);
+    const rectCount = el.getClientRects().length;
+    const sizeCollapsedY = (Number.isFinite(height) && height <= 0.5) || (Number.isFinite(maxHeight) && maxHeight <= 0.5);
+    const sizeCollapsedX = (Number.isFinite(width) && width <= 0.5) || (Number.isFinite(maxWidth) && maxWidth <= 0.5);
+    const sizeCollapseHint = (sizeCollapsedY && (clipY || rectCount === 0)) || (sizeCollapsedX && (clipX || rectCount === 0));
+
     const ownText = extractOwnText(el);
     let text = ownText;
     const hint = classTextHint(el);
-    if (!text && hint) {
+    if (!text && (hint || sizeCollapseHint)) {
       text = normText(el.textContent || "");
     }
     if (!text) {
@@ -130,15 +163,6 @@
     if (text.length > 8000 && !hint) {
       return null;
     }
-
-    const opacity = parseFloat(cs.opacity);
-    const fontSize = parseFloat(cs.fontSize);
-    const lineHeight = parseFloat(cs.lineHeight);
-    const textIndent = parseFloat(cs.textIndent);
-    const colorAlpha = alphaFromColor(cs.color || "");
-    const fillAlpha = alphaFromColor(cs.webkitTextFillColor || "");
-    const inlineStyle = (el.getAttribute("style") || "").toLowerCase();
-    const offscreen = isOffscreen(cs);
 
     if (cs.display === "none") {
       return "display-none";
@@ -153,9 +177,21 @@
       return "font-size-zero";
     }
     if (Number.isFinite(lineHeight) && lineHeight === 0) {
-      if ((Number.isFinite(fontSize) && fontSize <= 1) || el.getClientRects().length === 0) {
+      if ((Number.isFinite(fontSize) && fontSize <= 1) || rectCount === 0) {
         return "line-height-zero";
       }
+    }
+    if (Number.isFinite(height) && height <= 0.5 && (clipY || rectCount === 0)) {
+      return "height-zero";
+    }
+    if (Number.isFinite(maxHeight) && maxHeight <= 0.5 && (clipY || rectCount === 0)) {
+      return "max-height-zero";
+    }
+    if (Number.isFinite(width) && width <= 0.5 && (clipX || rectCount === 0)) {
+      return "width-zero";
+    }
+    if (Number.isFinite(maxWidth) && maxWidth <= 0.5 && (clipX || rectCount === 0)) {
+      return "max-width-zero";
     }
     if (Number.isFinite(textIndent) && textIndent <= -500) {
       return "text-indent-hide";
@@ -174,7 +210,7 @@
     }
 
     const transform = (cs.transform || "").toLowerCase();
-    if (transform.includes("scale(0") || transform.includes("matrix(0")) {
+    if (transform.includes("scale(0") || transform.includes("scalex(0") || transform.includes("scaley(0") || transform.includes("matrix(0")) {
       return "scaled-zero";
     }
 
@@ -253,6 +289,20 @@
       el.style.setProperty("top", "auto", "important");
       el.style.setProperty("bottom", "auto", "important");
       el.style.setProperty("transform", "none", "important");
+    }
+
+    if (reason === "height-zero" || reason === "max-height-zero") {
+      el.style.setProperty("height", "auto", "important");
+      el.style.setProperty("max-height", "none", "important");
+      el.style.setProperty("overflow", "visible", "important");
+      el.style.setProperty("overflow-y", "visible", "important");
+    }
+
+    if (reason === "width-zero" || reason === "max-width-zero") {
+      el.style.setProperty("width", "auto", "important");
+      el.style.setProperty("max-width", "none", "important");
+      el.style.setProperty("overflow", "visible", "important");
+      el.style.setProperty("overflow-x", "visible", "important");
     }
 
     const fs = parseFloat(cs.fontSize);

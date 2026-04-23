@@ -36,6 +36,111 @@
     return a;
   }
 
+  function parseRgb(color) {
+    if (!color) {
+      return null;
+    }
+    const c = color.trim().toLowerCase();
+    if (c === "transparent") {
+      return { r: 0, g: 0, b: 0, a: 0 };
+    }
+    let m = c.match(/^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/);
+    if (m) {
+      return { r: +m[1], g: +m[2], b: +m[3], a: 1 };
+    }
+    m = c.match(/^rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([\d.]+)\s*\)$/);
+    if (m) {
+      const a = parseFloat(m[4]);
+      return { r: +m[1], g: +m[2], b: +m[3], a: Number.isFinite(a) ? a : 1 };
+    }
+    return null;
+  }
+
+  function blendOver(fg, bg) {
+    const a = fg.a + bg.a * (1 - fg.a);
+    if (a <= 0) {
+      return { r: 0, g: 0, b: 0, a: 0 };
+    }
+    return {
+      r: (fg.r * fg.a + bg.r * bg.a * (1 - fg.a)) / a,
+      g: (fg.g * fg.a + bg.g * bg.a * (1 - fg.a)) / a,
+      b: (fg.b * fg.a + bg.b * bg.a * (1 - fg.a)) / a,
+      a: a
+    };
+  }
+
+  function hasBackgroundImage(cs) {
+    const bi = cs.backgroundImage;
+    if (!bi) {
+      return false;
+    }
+    return bi !== "none";
+  }
+
+  function effectiveBackground(el) {
+    let cur = el.parentElement;
+    let accum = null;
+    const ownCs = getComputedStyle(el);
+    const ownBg = parseRgb(ownCs.backgroundColor);
+    if (hasBackgroundImage(ownCs)) {
+      return null;
+    }
+    if (ownBg && ownBg.a > 0) {
+      accum = ownBg;
+      if (accum.a >= 0.999) {
+        return accum;
+      }
+    }
+    while (cur && cur instanceof Element) {
+      const cs = getComputedStyle(cur);
+      if (hasBackgroundImage(cs)) {
+        if (accum && accum.a >= 0.999) {
+          return accum;
+        }
+        return null;
+      }
+      const bg = parseRgb(cs.backgroundColor);
+      if (bg && bg.a > 0) {
+        if (!accum) {
+          accum = bg;
+        } else {
+          accum = blendOver(accum, bg);
+        }
+        if (accum.a >= 0.999) {
+          return accum;
+        }
+      }
+      cur = cur.parentElement;
+    }
+    // Browser canvas default — respect `color-scheme: dark` on <html>, else white.
+    const doc = el.ownerDocument || document;
+    const root = doc.documentElement;
+    let canvas = { r: 255, g: 255, b: 255, a: 1 };
+    if (root) {
+      const rootCs = getComputedStyle(root);
+      const scheme = (rootCs.colorScheme || "").toLowerCase();
+      if (scheme.indexOf("dark") !== -1 && scheme.indexOf("light") === -1) {
+        canvas = { r: 30, g: 30, b: 30, a: 1 };
+      }
+    }
+    if (!accum) {
+      return canvas;
+    }
+    return blendOver(accum, canvas);
+  }
+
+  function colorDistance(a, b) {
+    const rmean = (a.r + b.r) / 2;
+    const dr = a.r - b.r;
+    const dg = a.g - b.g;
+    const db = a.b - b.b;
+    return Math.sqrt((2 + rmean / 256) * dr * dr + 4 * dg * dg + (2 + (255 - rmean) / 256) * db * db);
+  }
+
+  function luminance(rgb) {
+    return 0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b;
+  }
+
   function normText(s) {
     if (!s) {
       return "";
@@ -241,6 +346,27 @@
       }
     }
 
+    // Text color ≈ background color (e.g. white on white). Requires opaque-ish text and enough
+    // content + render boxes to avoid lighting up decorative spans/icons.
+    const fillRgb = parseRgb(cs.webkitTextFillColor || "");
+    const textRgb = parseRgb(cs.color || "");
+    let effText = null;
+    if (fillRgb && fillRgb.a >= 0.5) {
+      effText = fillRgb;
+    } else if (textRgb && textRgb.a >= 0.5) {
+      effText = textRgb;
+    }
+    if (effText && text.length >= 4 && rectCount > 0) {
+      if (!Number.isFinite(fontSize) || fontSize >= 6) {
+        const bg = effectiveBackground(el);
+        if (bg && bg.a >= 0.5) {
+          if (colorDistance(effText, bg) < 25) {
+            return "color-matches-background";
+          }
+        }
+      }
+    }
+
     return null;
   }
 
@@ -318,6 +444,11 @@
     if (alphaFromColor(cs.color) <= 0.2 || cs.color === "transparent") {
       el.style.setProperty("color", "#111", "important");
       el.style.setProperty("-webkit-text-fill-color", "#111", "important");
+    } else if (reason === "color-matches-background") {
+      const bg = effectiveBackground(el);
+      const contrast = bg && luminance(bg) < 128 ? "#fff" : "#111";
+      el.style.setProperty("color", contrast, "important");
+      el.style.setProperty("-webkit-text-fill-color", contrast, "important");
     }
 
     applyHighlightStyle(el, mode === "highlight");
